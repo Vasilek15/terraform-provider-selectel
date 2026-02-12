@@ -12,7 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/selectel/go-selvpcclient/v3/selvpcclient/quotamanager/quotas"
+	"github.com/selectel/go-selvpcclient/v4/selvpcclient/quotamanager/quotas"
 	v1 "github.com/selectel/mks-go/pkg/v1"
 	"github.com/selectel/mks-go/pkg/v1/cluster"
 	"github.com/selectel/mks-go/pkg/v1/kubeoptions"
@@ -55,6 +55,54 @@ func waitForMKSClusterV1ActiveState(
 	return nil
 }
 
+func waitForMKSNodegroupV1ActiveState(
+	ctx context.Context, client *v1.ServiceClient, clusterID string, nodegroupID string, timeout time.Duration,
+) error {
+	pending := []string{
+		string(nodegroup.StatusPendingCreate),
+		string(nodegroup.StatusPendingUpdate),
+		string(nodegroup.StatusPendingDelete),
+		string(nodegroup.StatusPendingScaleUp),
+		string(nodegroup.StatusPendingScaleDown),
+		string(nodegroup.StatusPendingNodeReinstall),
+	}
+
+	target := []string{
+		string(nodegroup.StatusActive),
+	}
+
+	stateConf := &resource.StateChangeConf{
+		Pending:    pending,
+		Target:     target,
+		Refresh:    mksNodegroupV1StateRefreshFunc(ctx, client, clusterID, nodegroupID),
+		Timeout:    timeout,
+		Delay:      10 * time.Second,
+		MinTimeout: 3 * time.Second,
+	}
+
+	_, err := stateConf.WaitForStateContext(ctx)
+	if err != nil {
+		return fmt.Errorf(
+			"error waiting for the nodegroup %s to become 'ACTIVE': %s",
+			nodegroupID, err)
+	}
+
+	return nil
+}
+
+func mksNodegroupV1StateRefreshFunc(
+	ctx context.Context, client *v1.ServiceClient, clusterID, nodegroupID string,
+) resource.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+		ng, _, err := nodegroup.Get(ctx, client, clusterID, nodegroupID)
+		if err != nil {
+			return nil, "", err
+		}
+
+		return ng, string(ng.Status), nil
+	}
+}
+
 func mksClusterV1StateRefreshFunc(
 	ctx context.Context, client *v1.ServiceClient, clusterID string,
 ) resource.StateRefreshFunc {
@@ -68,20 +116,20 @@ func mksClusterV1StateRefreshFunc(
 	}
 }
 
-func mksClusterV1KubeVersionDiffSuppressFunc(_, old, new string, d *schema.ResourceData) bool {
+func mksClusterV1KubeVersionDiffSuppressFunc(_, oldVersion, newVersion string, d *schema.ResourceData) bool {
 	if d.Id() == "" {
 		return false
 	}
 
-	currentMajor, err := kubeVersionToMajor(old)
+	currentMajor, err := kubeVersionToMajor(oldVersion)
 	if err != nil {
-		log.Printf("[DEBUG] error getting a major part of the current kube version %s: %s", old, err)
+		log.Printf("[DEBUG] error getting a major part of the current kube version %s: %s", oldVersion, err)
 
 		return false
 	}
-	desiredMajor, err := kubeVersionToMajor(new)
+	desiredMajor, err := kubeVersionToMajor(newVersion)
 	if err != nil {
-		log.Printf("[DEBUG] error getting a major part of the desired kube version %s: %s", new, err)
+		log.Printf("[DEBUG] error getting a major part of the desired kube version %s: %s", newVersion, err)
 
 		return false
 	}
@@ -96,15 +144,15 @@ func mksClusterV1KubeVersionDiffSuppressFunc(_, old, new string, d *schema.Resou
 		return true
 	}
 
-	currentMinor, err := kubeVersionToMinor(old)
+	currentMinor, err := kubeVersionToMinor(oldVersion)
 	if err != nil {
-		log.Printf("[DEBUG] error getting a minor part of the current kube version %s: %s", old, err)
+		log.Printf("[DEBUG] error getting a minor part of the current kube version %s: %s", oldVersion, err)
 
 		return false
 	}
-	desiredMinor, err := kubeVersionToMinor(new)
+	desiredMinor, err := kubeVersionToMinor(newVersion)
 	if err != nil {
-		log.Printf("[DEBUG] error getting a minor part of the desired kube version %s: %s", new, err)
+		log.Printf("[DEBUG] error getting a minor part of the desired kube version %s: %s", newVersion, err)
 
 		return false
 	}
@@ -119,15 +167,15 @@ func mksClusterV1KubeVersionDiffSuppressFunc(_, old, new string, d *schema.Resou
 		return true
 	}
 
-	currentPatch, err := kubeVersionToPatch(old)
+	currentPatch, err := kubeVersionToPatch(oldVersion)
 	if err != nil {
-		log.Printf("[DEBUG] error getting a patch part of the current kube version %s: %s", old, err)
+		log.Printf("[DEBUG] error getting a patch part of the current kube version %s: %s", oldVersion, err)
 
 		return false
 	}
-	desiredPatch, err := kubeVersionToPatch(new)
+	desiredPatch, err := kubeVersionToPatch(newVersion)
 	if err != nil {
-		log.Printf("[DEBUG] error getting a patch part of the desired kube version %s: %s", new, err)
+		log.Printf("[DEBUG] error getting a patch part of the desired kube version %s: %s", newVersion, err)
 
 		return true
 	}
@@ -507,6 +555,18 @@ func flattenAdmissionControllersFromSlice(kubeVersion string, admissionControlle
 	return availableAdmissionControllers
 }
 
+func flattenMKSClusterV1OIDC(view *cluster.View) []interface{} {
+	return []interface{}{map[string]interface{}{
+		"enabled":        view.KubernetesOptions.OIDC.Enabled,
+		"provider_name":  view.KubernetesOptions.OIDC.ProviderName,
+		"issuer_url":     view.KubernetesOptions.OIDC.IssuerURL,
+		"client_id":      view.KubernetesOptions.OIDC.ClientID,
+		"username_claim": view.KubernetesOptions.OIDC.UsernameClaim,
+		"groups_claim":   view.KubernetesOptions.OIDC.GroupsClaim,
+		"ca_certs":       view.KubernetesOptions.OIDC.CACerts,
+	}}
+}
+
 func expandMKSNodegroupV1Taints(taints []interface{}) []nodegroup.Taint {
 	result := make([]nodegroup.Taint, len(taints))
 	for i := range taints {
@@ -538,6 +598,47 @@ func expandMKSNodegroupV1Labels(labels map[string]interface{}) map[string]string
 	}
 
 	return result
+}
+
+func expandMKSClusterV1OIDC(d *schema.ResourceData) cluster.OIDC {
+	nestedResource := d.Get("oidc").([]any)
+	if len(nestedResource) == 0 {
+		return cluster.OIDC{}
+	}
+
+	// Resource always comes with only first element because of validation
+	resourceMap := nestedResource[0].(map[string]interface{})
+
+	return cluster.OIDC{
+		Enabled:       resourceMap["enabled"].(bool),
+		ProviderName:  resourceMap["provider_name"].(string),
+		IssuerURL:     resourceMap["issuer_url"].(string),
+		ClientID:      resourceMap["client_id"].(string),
+		UsernameClaim: resourceMap["username_claim"].(string),
+		GroupsClaim:   resourceMap["groups_claim"].(string),
+		CACerts:       resourceMap["ca_certs"].(string),
+	}
+}
+
+func expandAndValidateMKSClusterV1OIDC(d *schema.ResourceData) (cluster.OIDC, error) {
+	oidc := expandMKSClusterV1OIDC(d)
+
+	if oidc.Enabled {
+		for _, s := range []string{oidc.ProviderName, oidc.IssuerURL, oidc.ClientID} {
+			if s == "" {
+				return cluster.OIDC{}, errors.New("\"provider_name\", \"issuer_url\" and \"client_id\" " +
+					"should not be empty in case of enabled oidc")
+			}
+		}
+	} else {
+		for _, s := range []string{oidc.ProviderName, oidc.IssuerURL, oidc.ClientID, oidc.UsernameClaim, oidc.GroupsClaim} {
+			if s != "" {
+				return cluster.OIDC{}, errors.New("oidc params cannot be configured if it is disabled")
+			}
+		}
+	}
+
+	return oidc, nil
 }
 
 func getMKSClient(d *schema.ResourceData, meta interface{}) (*v1.ServiceClient, diag.Diagnostics) {
@@ -711,11 +812,17 @@ func checkQuotasForNodegroup(projectQuotas []*quotas.Quota, nodegroupOpts *nodeg
 		case "universal":
 			volumeQuota = findQuota(projectQuotas, "volume_gigabytes_universal")
 			volumeType = "universal"
+		case "universal2":
+			volumeQuota = findQuota(projectQuotas, "volume_gigabytes_universal2")
+			volumeType = "universal2"
+		case "basicssd":
+			volumeQuota = findQuota(projectQuotas, "volume_gigabytes_basicssd")
+			volumeType = "basicssd"
 		case "basic":
 			volumeQuota = findQuota(projectQuotas, "volume_gigabytes_basic")
 			volumeType = "basic"
 		default:
-			return fmt.Errorf("expected 'fast.<zone>', 'universal.<zone>' or 'basic.<zone>' volume type, got: %s", nodegroupOpts.VolumeType)
+			return fmt.Errorf("expected 'fast.<zone>', 'universal.<zone>', 'universal2.<zone>', 'basicssd.<zone>' or 'basic.<zone>' volume type, got: %s", nodegroupOpts.VolumeType)
 		}
 	}
 	if volumeQuota == nil {
@@ -762,4 +869,43 @@ func checkQuotasForNodegroup(projectQuotas []*quotas.Quota, nodegroupOpts *nodeg
 	}
 
 	return nil
+}
+
+// waitForMKSNodegroupV1Creation waits for the nodegroup to be created. It returns an error if the nodegroup is not created.
+func waitForMKSNodegroupV1Creation(ctx context.Context, mksClient *v1.ServiceClient, clusterID string, timeout time.Duration, existingNodegroups map[string]struct{}) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var nodegroupID string
+	for {
+		allNodegroups, _, err := nodegroup.List(ctx, mksClient, clusterID)
+		if err != nil {
+			return "", fmt.Errorf("error getting nodegroups in cluster %s: %w", clusterID, err)
+		}
+
+		for _, ng := range allNodegroups {
+			if _, ok := existingNodegroups[ng.ID]; !ok {
+				nodegroupID = ng.ID
+				break
+			}
+		}
+
+		if nodegroupID != "" {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("timeout waiting for nodegroup creation in cluster %s", clusterID)
+		case <-time.After(10 * time.Second):
+		}
+	}
+
+	log.Printf("[DEBUG] waiting for nodegroup %s to become 'ACTIVE'", nodegroupID)
+	// Timeout should not be reduced here because it's already applied to ctx in WithTimeout.
+	if err := waitForMKSNodegroupV1ActiveState(ctx, mksClient, clusterID, nodegroupID, timeout); err != nil {
+		return "", err
+	}
+
+	return nodegroupID, nil
 }

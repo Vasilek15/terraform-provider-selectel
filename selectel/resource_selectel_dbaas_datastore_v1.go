@@ -70,6 +70,7 @@ func resourceDBaaSDatastoreV1Create(ctx context.Context, d *schema.ResourceData,
 	}
 
 	datastoreCreateOpts := dbaas.DatastoreCreateOpts{
+		ProjectID:   d.Get("project_id").(string),
 		Name:        d.Get("name").(string),
 		TypeID:      d.Get("type_id").(string),
 		SubnetID:    d.Get("subnet_id").(string),
@@ -78,6 +79,16 @@ func resourceDBaaSDatastoreV1Create(ctx context.Context, d *schema.ResourceData,
 		Restore:     restore,
 		Config:      d.Get("config").(map[string]interface{}),
 		FloatingIPs: floatingIPsSchema,
+	}
+
+	sgRaw, sgOk := d.GetOk("security_groups")
+	if sgOk {
+		sgSet := sgRaw.(*schema.Set)
+		sg, err := resourceDBaaSDatastoreV1SecurityGroupsFromSet(sgSet)
+		if err != nil {
+			return diag.FromErr(errParseDatastoreV1SecurityGroups(err))
+		}
+		datastoreCreateOpts.SecurityGroups = sg
 	}
 
 	if flavorOk {
@@ -102,6 +113,11 @@ func resourceDBaaSDatastoreV1Create(ctx context.Context, d *schema.ResourceData,
 	backupRetentionDays, ok := d.GetOk("backup_retention_days")
 	if ok {
 		datastoreCreateOpts.BackupRetentionDays = backupRetentionDays.(int)
+	}
+
+	logs, logsOk := d.GetOk("logs")
+	if logsOk {
+		datastoreCreateOpts.LogPlatform = &dbaas.DatastoreLogGroup{LogGroup: logs.(string)}
 	}
 
 	log.Print(msgCreate(objectDatastore, datastoreCreateOpts))
@@ -133,6 +149,7 @@ func resourceDBaaSDatastoreV1Read(ctx context.Context, d *schema.ResourceData, m
 	if err != nil {
 		return diag.FromErr(errGettingObject(objectDatastore, d.Id(), err))
 	}
+
 	d.Set("name", datastore.Name)
 	d.Set("status", datastore.Status)
 	d.Set("project_id", datastore.ProjectID)
@@ -142,6 +159,8 @@ func resourceDBaaSDatastoreV1Read(ctx context.Context, d *schema.ResourceData, m
 	d.Set("enabled", datastore.Enabled)
 	d.Set("flavor_id", datastore.FlavorID)
 	d.Set("backup_retention_days", datastore.BackupRetentionDays)
+	d.Set("security_groups", datastore.SecurityGroups)
+	d.Set("logs", datastore.LogPlatform.LogGroup)
 
 	flavor := resourceDBaaSDatastoreV1FlavorToSet(datastore.Flavor)
 	if err := d.Set("flavor", flavor); err != nil {
@@ -168,6 +187,7 @@ func resourceDBaaSDatastoreV1Read(ctx context.Context, d *schema.ResourceData, m
 	return nil
 }
 
+//nolint:gocognit
 func resourceDBaaSDatastoreV1Update(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	dbaasClient, diagErr := getDBaaSClient(d, meta)
 	if diagErr != nil {
@@ -222,6 +242,17 @@ func resourceDBaaSDatastoreV1Update(ctx context.Context, d *schema.ResourceData,
 			return diag.FromErr(err)
 		}
 	}
+	if d.HasChange("security_groups") {
+		err := updateDatastoreSecurityGroups(ctx, d, dbaasClient)
+		if err != nil {
+			return diag.FromErr(err)
+		}
+	}
+	if d.HasChange("logs") {
+		if err := dbaasLogsUpdate(ctx, d, dbaasClient); err != nil {
+			return diag.FromErr(err)
+		}
+	}
 
 	return resourceDBaaSDatastoreV1Read(ctx, d, meta)
 }
@@ -259,10 +290,10 @@ func resourceDBaaSDatastoreV1Delete(ctx context.Context, d *schema.ResourceData,
 func resourceDBaaSDatastoreV1ImportState(_ context.Context, d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
 	config := meta.(*Config)
 	if config.ProjectID == "" {
-		return nil, errors.New("SEL_PROJECT_ID must be set for the resource import")
+		return nil, errors.New("INFRA_PROJECT_ID must be set for the resource import")
 	}
 	if config.Region == "" {
-		return nil, errors.New("SEL_REGION must be set for the resource import")
+		return nil, errors.New("INFRA_REGION must be set for the resource import")
 	}
 
 	d.Set("project_id", config.ProjectID)

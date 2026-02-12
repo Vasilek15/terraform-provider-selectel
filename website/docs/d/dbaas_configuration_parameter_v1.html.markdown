@@ -27,7 +27,7 @@ data "selectel_dbaas_configuration_parameter_v1" "configuration_parameter_1" {
 
 * `filter` - (Optional) Values to filter available extensions.
 
-  * `datastore_type_id` - (Optional) Unique identifier of the datastore type for which you get configuration parameters.  You can retrieve information about available datastore types with the [selectel_dbaas_datastore_type_v1](https://registry.terraform.io/providers/selectel/selectel/latest/docs/data-sources/dbaas_datastore_type_v1) data source.
+  * `datastore_type_id` - (Optional) Unique identifier of the cluster type for which you get configuration parameters.  You can retrieve information about available cluster types with the [selectel_dbaas_datastore_type_v1](https://registry.terraform.io/providers/selectel/selectel/latest/docs/data-sources/dbaas_datastore_type_v1) data source.
 
   * `name` - (Optional) Name of the configuration parameter to search.
 
@@ -37,7 +37,7 @@ data "selectel_dbaas_configuration_parameter_v1" "configuration_parameter_1" {
 
   * `id` - Unique identifier of the configuration parameter.
 
-  * `datastore_type_id` - Unique identifier of the datastore type for which the configuration parameter is available.
+  * `datastore_type_id` - Unique identifier of the cluster type for which the configuration parameter is available.
 
   * `name` - Name of the configuration parameter.
 
@@ -51,11 +51,12 @@ data "selectel_dbaas_configuration_parameter_v1" "configuration_parameter_1" {
 
   * `default_value` - Default value of the configuration parameter. Might be empty.
 
-  * `choices` - Available choices for the configuration parameter. Some parameters have list of available options.
+  * `choices` - Available choices for the configuration parameter. Some parameters have a list of available options.
 
   * `invalid_values` - Invalid values for the configuration parameter.
-  Some parameters have list of values within a range that are not available for the parameter.
+  Some parameters have a list of values within a range that are not available for the parameter.
 
   * `is_restart_required` - Shows if the database needs a restart to apply changes.
 
   * `is_changeable` - Shows if the parameter can be changed.
+  

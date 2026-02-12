@@ -40,9 +40,10 @@ resource "selectel_dbaas_datastore_v1" "datastore_1" {
   subnet_id    = "${selectel_vpc_subnet_v2.subnet.subnet_id}"
   node_count   = 3
   flavor {
-    vcpus = 4
-    ram   = 4096
-    disk  = 32
+    vcpus     = 4
+    ram       = 4096
+    disk      = 32
+    disk_type = "network-ultra"
   }
   pooler {
     mode = "transaction"
@@ -85,7 +86,7 @@ The following arguments are supported:
 
 * `pooler` - (Optional) Pooler configuration for the datastore (only for PostgreSQL datastore). It's a complex value. See description below.
 
-* `firewall` - (Optional) List of the ips to allow access from.
+* `firewall` - (Deprecated) Remove this argument as it is no longer in use and will be removed in the next major version of the provider. To manage a list of IP-addresses with access to the datastore, use the [selectel_dbaas_firewall_v1](https://registry.terraform.io/providers/selectel/selectel/latest/docs/resources/dbaas_firewall_v1) resource.
 
 * `restore` - (Optional) Restore parameters for the datastore. It's a complex value. See description below.
   Changing this creates a new datastore.
@@ -94,13 +95,14 @@ The following arguments are supported:
 
 * `backup_retention_days` - (Optional) Number of days to retain backups.
 
-* `redis_password` - (Optional) Password for the Redis datastore (only for Redis datastores)
+* `redis_password` - (Optional) Password for the Redis datastore (only for Redis datastores).
 
 **flavor**
 
 - `vcpus` - (Required) CPU count for the flavor.
 - `ram` - (Required) RAM count for the flavor.
 - `disk` - (Required) Disk size for the flavor.
+- `disk_type` - (Optional) Disk type for the flavor. Valid values: ["local", "network-ultra"]. Default value: "local".
 
 **pooler**
 
@@ -125,10 +127,10 @@ The following attributes are exported:
 Datastore can be imported using the `id`, e.g.
 
 ```shell
-$ export OS_DOMAIN_NAME=999999
-$ export OS_USERNAME=example_user
-$ export OS_PASSWORD=example_password
-$ export SEL_PROJECT_ID=SELECTEL_VPC_PROJECT_ID
-$ export SEL_REGION=SELECTEL_VPC_REGION
-$ terraform import selectel_dbaas_datastore_v1.datastore_1 b311ce58-2658-46b5-b733-7a0f418703f2
+export OS_DOMAIN_NAME=999999
+export OS_USERNAME=example_user
+export OS_PASSWORD=example_password
+export INFRA_PROJECT_ID=SELECTEL_VPC_PROJECT_ID
+export INFRA_REGION=SELECTEL_VPC_REGION
+terraform import selectel_dbaas_datastore_v1.datastore_1 b311ce58-2658-46b5-b733-7a0f418703f2
 ```

@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/customdiff"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/selectel/go-selvpcclient/v3/selvpcclient/quotamanager/quotas"
+	"github.com/selectel/go-selvpcclient/v4/selvpcclient/quotamanager/quotas"
 	"github.com/selectel/mks-go/pkg/v1/cluster"
 )
 
@@ -45,8 +45,8 @@ func resourceMKSClusterV1() *schema.Resource {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
-				DiffSuppressFunc: func(_, old, new string, _ *schema.ResourceData) bool {
-					return strings.EqualFold(old, new)
+				DiffSuppressFunc: func(_, oldVersion, newVersion string, _ *schema.ResourceData) bool {
+					return strings.EqualFold(oldVersion, newVersion)
 				},
 			},
 			"project_id": {
@@ -77,7 +77,6 @@ func resourceMKSClusterV1() *schema.Resource {
 			"enable_patch_version_auto_upgrade": {
 				Type:     schema.TypeBool,
 				Optional: true,
-				Default:  true,
 				ForceNew: false,
 			},
 			"enable_pod_security_policy": {
@@ -146,6 +145,70 @@ func resourceMKSClusterV1() *schema.Resource {
 				Default:  false,
 				ForceNew: true,
 			},
+			"enable_audit_logs": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+				ForceNew: false,
+			},
+			"oidc": {
+				Type:     schema.TypeList,
+				Optional: true,
+				ForceNew: false,
+				MaxItems: 1,
+				MinItems: 1,
+				Computed: true,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"enabled": {
+							Type:     schema.TypeBool,
+							Required: true,
+						},
+						"provider_name": {
+							Type:     schema.TypeString,
+							Optional: true,
+						},
+						"issuer_url": {
+							Type:     schema.TypeString,
+							Optional: true,
+						},
+						"client_id": {
+							Type:     schema.TypeString,
+							Optional: true,
+						},
+						"username_claim": {
+							Type:     schema.TypeString,
+							Optional: true,
+							Default:  "",
+							DiffSuppressFunc: func(_, oldVersion, newVersion string, d *schema.ResourceData) bool {
+								oidc := expandMKSClusterV1OIDC(d)
+
+								// Ignore diff on default value from API.
+								return oldVersion == "sub" && newVersion == "" && oidc.Enabled
+							},
+						},
+						"groups_claim": {
+							Type:     schema.TypeString,
+							Optional: true,
+							Default:  "",
+							DiffSuppressFunc: func(_, oldVersion, newVersion string, d *schema.ResourceData) bool {
+								oidc := expandMKSClusterV1OIDC(d)
+
+								// Ignore diff on default value from API.
+								return oldVersion == "groups" && newVersion == "" && oidc.Enabled
+							},
+						},
+						"ca_certs": {
+							Type:     schema.TypeString,
+							Optional: true,
+							Default:  "",
+							DiffSuppressFunc: func(_, oldVersion, newVersion string, _ *schema.ResourceData) bool {
+								return strings.TrimSpace(oldVersion) == strings.TrimSpace(newVersion)
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 }
@@ -171,10 +234,15 @@ func resourceMKSClusterV1Create(ctx context.Context, d *schema.ResourceData, met
 
 	// Prepare cluster create options.
 	enableAutorepair := d.Get("enable_autorepair").(bool)
-	enablePatchVersionAutoUpgrade := d.Get("enable_patch_version_auto_upgrade").(bool)
 	enablePodSecurityPolicy := d.Get("enable_pod_security_policy").(bool)
 	zonal := d.Get("zonal").(bool)
 	privateKubeAPI := d.Get("private_kube_api").(bool)
+	enableAuditLogs := d.Get("enable_audit_logs").(bool)
+
+	enablePatchVersionAutoUpgrade := !zonal // true by default only for regional clusters
+	if v, ok := d.GetOk("enable_patch_version_auto_upgrade"); ok {
+		enablePatchVersionAutoUpgrade = v.(bool)
+	}
 
 	// Check if "enable_patch_version_auto_upgrade" and "zonal" arguments are both not set to true.
 	if enablePatchVersionAutoUpgrade && zonal {
@@ -192,6 +260,11 @@ func resourceMKSClusterV1Create(ctx context.Context, d *schema.ResourceData, met
 		return diag.FromErr(errCreatingObject(objectCluster, err))
 	}
 
+	oidc, err := expandAndValidateMKSClusterV1OIDC(d)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+
 	createOpts := &cluster.CreateOpts{
 		Name:                          d.Get("name").(string),
 		NetworkID:                     d.Get("network_id").(string),
@@ -205,12 +278,22 @@ func resourceMKSClusterV1Create(ctx context.Context, d *schema.ResourceData, met
 			EnablePodSecurityPolicy: enablePodSecurityPolicy,
 			FeatureGates:            featureGates,
 			AdmissionControllers:    admissionControllers,
+			AuditLogs: cluster.AuditLogs{
+				Enabled: enableAuditLogs,
+			},
+			OIDC: oidc,
 		},
 		Zonal:          &zonal,
 		PrivateKubeAPI: &privateKubeAPI,
 	}
 
-	projectQuotas, _, err := quotas.GetProjectQuotas(selvpcClient, projectID, region)
+	projectQuotas, _, err := quotas.GetProjectQuotas(
+		selvpcClient,
+		projectID,
+		region,
+		quotas.WithResourceFilter("mks_cluster_zonal"),
+		quotas.WithResourceFilter("mks_cluster_regional"),
+	)
 	if err != nil {
 		return diag.FromErr(errGettingObject(objectProjectQuotas, projectID, err))
 	}
@@ -271,6 +354,8 @@ func resourceMKSClusterV1Read(ctx context.Context, d *schema.ResourceData, meta 
 	d.Set("enable_pod_security_policy", mksCluster.KubernetesOptions.EnablePodSecurityPolicy)
 	d.Set("zonal", mksCluster.Zonal)
 	d.Set("private_kube_api", mksCluster.PrivateKubeAPI)
+	d.Set("enable_audit_logs", mksCluster.KubernetesOptions.AuditLogs.Enabled)
+	d.Set("oidc", flattenMKSClusterV1OIDC(mksCluster))
 
 	return nil
 }
@@ -319,6 +404,18 @@ func resourceMKSClusterV1Update(ctx context.Context, d *schema.ResourceData, met
 		}
 		kubeOptions.AdmissionControllers = v
 	}
+	if d.HasChange("enable_audit_logs") {
+		v := d.Get("enable_audit_logs").(bool)
+		kubeOptions.AuditLogs.Enabled = v
+	}
+	if d.HasChange("oidc") {
+		oidc, err := expandAndValidateMKSClusterV1OIDC(d)
+		if err != nil {
+			return diag.FromErr(err)
+		}
+		kubeOptions.OIDC = oidc
+	}
+
 	updateOpts.KubernetesOptions = kubeOptions
 
 	if updateOpts != (cluster.UpdateOpts{}) {
@@ -383,10 +480,10 @@ func resourceMKSClusterV1Delete(ctx context.Context, d *schema.ResourceData, met
 func resourceMKSClusterV1ImportState(_ context.Context, d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
 	config := meta.(*Config)
 	if config.ProjectID == "" {
-		return nil, errors.New("SEL_PROJECT_ID must be set for the resource import")
+		return nil, errors.New("INFRA_PROJECT_ID must be set for the resource import")
 	}
 	if config.Region == "" {
-		return nil, errors.New("SEL_REGION must be set for the resource import")
+		return nil, errors.New("INFRA_REGION must be set for the resource import")
 	}
 
 	d.Set("project_id", config.ProjectID)

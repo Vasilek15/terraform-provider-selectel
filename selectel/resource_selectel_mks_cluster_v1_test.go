@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/selectel/go-selvpcclient/v3/selvpcclient/resell/v2/projects"
+	"github.com/selectel/go-selvpcclient/v4/selvpcclient/resell/v2/projects"
 	v1 "github.com/selectel/mks-go/pkg/v1"
 	"github.com/selectel/mks-go/pkg/v1/cluster"
 	"github.com/selectel/mks-go/pkg/v1/kubeoptions"
@@ -56,6 +56,14 @@ func TestAccMKSClusterV1Basic(t *testing.T) {
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "status", "ACTIVE"),
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "feature_gates.0", defaultFeatureGates[0]),
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "admission_controllers.0", defaultAdmissionControllers[0]),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "enable_audit_logs", "false"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.enabled", "false"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.provider_name", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.issuer_url", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.client_id", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.username_claim", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.groups_claim", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.ca_certs", ""),
 				),
 			},
 			{
@@ -71,6 +79,14 @@ func TestAccMKSClusterV1Basic(t *testing.T) {
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "status", "ACTIVE"),
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "feature_gates.0", defaultFeatureGates[1]),
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "admission_controllers.0", defaultAdmissionControllers[1]),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "enable_audit_logs", "true"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.enabled", "true"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.provider_name", "kubernetes"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.issuer_url", "https://keycloak.example.com/realms/kubernetes"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.client_id", "test"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.username_claim", "email"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.groups_claim", "groups"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.ca_certs", "ca_certs"),
 				),
 			},
 		},
@@ -107,6 +123,14 @@ func TestAccMKSClusterV1Zonal(t *testing.T) {
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "private_kube_api", "false"),
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "maintenance_window_start", maintenanceWindowStart),
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "status", "ACTIVE"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "enable_audit_logs", "true"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.enabled", "true"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.provider_name", "kubernetes"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.issuer_url", "https://keycloak.example.com/realms/kubernetes"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.client_id", "test"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.username_claim", "email"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.groups_claim", "groups"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.ca_certs", "ca_certs"),
 				),
 			},
 		},
@@ -143,6 +167,14 @@ func TestAccMKSClusterV1PrivateKubeAPI(t *testing.T) {
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "private_kube_api", "true"),
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "maintenance_window_start", maintenanceWindowStart),
 					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "status", "ACTIVE"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "enable_audit_logs", "false"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.enabled", "false"),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.provider_name", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.issuer_url", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.client_id", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.username_claim", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.groups_claim", ""),
+					resource.TestCheckResourceAttr("selectel_mks_cluster_v1.cluster_tf_acc_test_1", "oidc.0.ca_certs", ""),
 				),
 			},
 		},
@@ -290,6 +322,7 @@ resource "selectel_mks_cluster_v1" "cluster_tf_acc_test_1" {
   enable_pod_security_policy        = false
   feature_gates                     = [%s]
   admission_controllers             = [%s]
+  enable_audit_logs                 = true
 }`, projectName, clusterName, kubeVersion, maintenanceWindowStart, flatFeatureGates, flatAdmissionControllers)
 }
 
@@ -306,6 +339,16 @@ func testAccMKSClusterV1Zonal(projectName, clusterName, kubeVersion, maintenance
    maintenance_window_start          = "%s"
    enable_patch_version_auto_upgrade = false
    zonal                             = true
+   enable_audit_logs                 = true
+   oidc {
+	 enabled        = true
+	 provider_name  = "kubernetes"
+	 client_id      = "test"
+	 issuer_url     = "https://keycloak.example.com/realms/kubernetes"
+	 username_claim = "email"
+	 groups_claim   = "groups"
+	 ca_certs       = "ca_certs"
+   }
  }`, projectName, clusterName, kubeVersion, maintenanceWindowStart)
 }
 
@@ -323,6 +366,10 @@ func testAccMKSClusterV1PrivateKubeAPI(projectName, clusterName, kubeVersion, ma
    enable_patch_version_auto_upgrade = false
    zonal                             = false
    private_kube_api                  = true
+   enable_audit_logs                 = false
+   oidc {
+     enabled = false
+   }
  }`, projectName, clusterName, kubeVersion, maintenanceWindowStart)
 }
 

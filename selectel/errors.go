@@ -4,6 +4,8 @@ import (
 	"fmt"
 )
 
+var ErrNotFound = fmt.Errorf("not found")
+
 func errParsingPrefixLength(object, id string, err error) string {
 	return fmt.Sprintf("[DEBUG] can't parse prefix length from %s '%s' CIDR: %s", object, id, err)
 }
@@ -106,4 +108,8 @@ func errParseDatastoreV1Restore(err error) error {
 
 func errParseDatastoreV1FloatingIPs(err error) error {
 	return fmt.Errorf("got error parsing floating IPs opts: %s", err)
+}
+
+func errParseDatastoreV1SecurityGroups(err error) error {
+	return fmt.Errorf("got error parsing security groups: %s", err)
 }

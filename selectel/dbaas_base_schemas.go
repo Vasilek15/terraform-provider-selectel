@@ -1,6 +1,10 @@
 package selectel
 
-import "github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+import (
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/selectel/dbaas-go"
+)
 
 func resourceDBaaSDatastoreV1BaseSchema() map[string]*schema.Schema {
 	return map[string]*schema.Schema{
@@ -47,11 +51,6 @@ func resourceDBaaSDatastoreV1BaseSchema() map[string]*schema.Schema {
 			Type:     schema.TypeString,
 			Computed: true,
 		},
-		"backup_retention_days": {
-			Type:        schema.TypeInt,
-			Optional:    true,
-			Description: "Number of days to retain backups.",
-		},
 		"connections": {
 			Type:     schema.TypeMap,
 			Computed: true,
@@ -79,6 +78,17 @@ func resourceDBaaSDatastoreV1BaseSchema() map[string]*schema.Schema {
 						Type:     schema.TypeInt,
 						Required: true,
 					},
+					"disk_type": {
+						Type:     schema.TypeString,
+						Optional: true,
+						Default:  string(dbaas.DiskLocal),
+						ValidateFunc: validation.StringInSlice([]string{
+							string(dbaas.DiskLocal),
+							string(dbaas.DiskNetworkUltra),
+						},
+							false,
+						),
+					},
 				},
 			},
 		},
@@ -96,6 +106,7 @@ func resourceDBaaSDatastoreV1BaseSchema() map[string]*schema.Schema {
 					},
 				},
 			},
+			Deprecated: "firewall has been deprecated in favour of using `selectel_dbaas_firewall_v1` resource instead.",
 		},
 		"config": {
 			Type:     schema.TypeMap,
@@ -119,6 +130,14 @@ func resourceDBaaSDatastoreV1BaseSchema() map[string]*schema.Schema {
 						Computed: true,
 					},
 				},
+			},
+		},
+		"security_groups": {
+			Type:     schema.TypeSet,
+			Optional: true,
+			Elem: &schema.Schema{
+				Type:         schema.TypeString,
+				ValidateFunc: validation.IsUUID,
 			},
 		},
 	}

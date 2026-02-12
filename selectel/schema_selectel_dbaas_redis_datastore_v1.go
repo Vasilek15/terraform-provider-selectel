@@ -8,6 +8,7 @@ func resourceDBaaSRedisDatastoreV1Schema() map[string]*schema.Schema {
 		Type:        schema.TypeInt,
 		Optional:    true,
 		Description: "Number of days to retain backups.",
+		Default:     7,
 	}
 	datastoreSchema["restore"] = &schema.Schema{
 		Type:     schema.TypeSet,
@@ -70,6 +71,11 @@ func resourceDBaaSRedisDatastoreV1Schema() map[string]*schema.Schema {
 				},
 			},
 		},
+	}
+	datastoreSchema["logs"] = &schema.Schema{
+		Type:        schema.TypeString,
+		Optional:    true,
+		Description: "Name of Logs group.",
 	}
 
 	return datastoreSchema

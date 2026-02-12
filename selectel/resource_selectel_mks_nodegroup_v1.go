@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/customdiff"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/selectel/go-selvpcclient/v3/selvpcclient/quotamanager/quotas"
+	"github.com/selectel/go-selvpcclient/v4/selvpcclient/quotamanager/quotas"
 	"github.com/selectel/mks-go/pkg/v1/nodegroup"
 )
 
@@ -40,6 +44,10 @@ func resourceMKSNodegroupV1() *schema.Resource {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
+			},
+			"status": {
+				Type:     schema.TypeString,
+				Computed: true,
 			},
 			"region": {
 				Type:     schema.TypeString,
@@ -88,10 +96,9 @@ func resourceMKSNodegroupV1() *schema.Resource {
 				Computed: true,
 			},
 			"volume_type": {
-				Type:          schema.TypeString,
-				ConflictsWith: []string{"local_volume"},
-				Optional:      true,
-				ForceNew:      true,
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
 			},
 			"local_volume": {
 				Type:     schema.TypeBool,
@@ -136,28 +143,35 @@ func resourceMKSNodegroupV1() *schema.Resource {
 				},
 			},
 			"enable_autoscale": {
-				Type:         schema.TypeBool,
-				Optional:     true,
-				Computed:     true,
-				RequiredWith: []string{"autoscale_min_nodes", "autoscale_max_nodes"},
+				Type:     schema.TypeBool,
+				Optional: true,
+				Computed: true,
 			},
 			"autoscale_min_nodes": {
-				Type:         schema.TypeInt,
-				Optional:     true,
-				Computed:     true,
-				RequiredWith: []string{"enable_autoscale", "autoscale_max_nodes"},
+				Type:     schema.TypeInt,
+				Optional: true,
+				Computed: true,
 			},
 			"autoscale_max_nodes": {
-				Type:         schema.TypeInt,
-				Optional:     true,
-				Computed:     true,
-				RequiredWith: []string{"enable_autoscale", "autoscale_min_nodes"},
+				Type:     schema.TypeInt,
+				Optional: true,
+				Computed: true,
 			},
 			"user_data": {
 				Type:         schema.TypeString,
 				Optional:     true,
 				ForceNew:     true,
 				ValidateFunc: validation.StringLenBetween(0, 65535),
+			},
+			"install_nvidia_device_plugin": {
+				Type:     schema.TypeBool,
+				Required: true,
+				ForceNew: true,
+			},
+			"preemptible": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				ForceNew: true,
 			},
 			"nodegroup_type": {
 				Type:     schema.TypeString,
@@ -186,11 +200,11 @@ func resourceMKSNodegroupV1() *schema.Resource {
 		},
 		CustomizeDiff: customdiff.All(
 			// We need to recreate nodegroup if flavor changed.
-			customdiff.ForceNewIfChange("flavor_id", func(_ context.Context, old, new, _ interface{}) bool {
-				return old.(string) != new.(string)
+			customdiff.ForceNewIfChange("flavor_id", func(_ context.Context, oldVersion, newVersion, _ interface{}) bool {
+				return oldVersion.(string) != newVersion.(string)
 			}),
-			customdiff.ForceNewIfChange("local_volume", func(_ context.Context, old, new, _ interface{}) bool {
-				return old.(bool) != new.(bool)
+			customdiff.ForceNewIfChange("local_volume", func(_ context.Context, oldVersion, newVersion, _ interface{}) bool {
+				return oldVersion.(bool) != newVersion.(bool)
 			}),
 		),
 	}
@@ -235,21 +249,51 @@ func resourceMKSNodegroupV1Create(ctx context.Context, d *schema.ResourceData, m
 	}
 
 	// Prepare nodegroup create options.
+	installNvidiaDevicePlugin := d.Get("install_nvidia_device_plugin").(bool)
+	preemptible := d.Get("preemptible").(bool)
 	createOpts := &nodegroup.CreateOpts{
-		Count:            d.Get("nodes_count").(int),
-		FlavorID:         d.Get("flavor_id").(string),
-		CPUs:             d.Get("cpus").(int),
-		RAMMB:            d.Get("ram_mb").(int),
-		VolumeGB:         d.Get("volume_gb").(int),
-		VolumeType:       d.Get("volume_type").(string),
-		LocalVolume:      d.Get("local_volume").(bool),
-		KeypairName:      d.Get("keypair_name").(string),
-		AffinityPolicy:   d.Get("affinity_policy").(string),
-		AvailabilityZone: d.Get("availability_zone").(string),
-		UserData:         d.Get("user_data").(string),
+		Count:                     d.Get("nodes_count").(int),
+		FlavorID:                  d.Get("flavor_id").(string),
+		CPUs:                      d.Get("cpus").(int),
+		RAMMB:                     d.Get("ram_mb").(int),
+		VolumeGB:                  d.Get("volume_gb").(int),
+		VolumeType:                d.Get("volume_type").(string),
+		LocalVolume:               d.Get("local_volume").(bool),
+		KeypairName:               d.Get("keypair_name").(string),
+		AffinityPolicy:            d.Get("affinity_policy").(string),
+		AvailabilityZone:          d.Get("availability_zone").(string),
+		UserData:                  d.Get("user_data").(string),
+		InstallNvidiaDevicePlugin: &installNvidiaDevicePlugin,
+		Preemptible:               &preemptible,
 	}
 
-	projectQuotas, _, err := quotas.GetProjectQuotas(selvpcClient, projectID, region)
+	if createOpts.LocalVolume && createOpts.VolumeType != "" {
+		return diag.FromErr(fmt.Errorf("can't use local_volume=true with volume_type: %w", err))
+	}
+	if !createOpts.LocalVolume && createOpts.VolumeType == "" {
+		return diag.FromErr(fmt.Errorf("can't use local_volume=false without specify volume_type: %w", err))
+	}
+	filters := []func(url.Values){
+		quotas.WithResourceFilter("compute_cores"),
+		quotas.WithResourceFilter("compute_ram"),
+	}
+	if createOpts.LocalVolume {
+		filters = append(filters, quotas.WithResourceFilter("volume_gigabytes_local"))
+	} else {
+		// Removing an availability zone from volume type.
+		// For example: `fast.ru-3a` -> `fast`.
+		volumeType := strings.Split(createOpts.VolumeType, ".")[0]
+		resourceName := "volume_gigabytes_" + volumeType
+
+		filters = append(filters, quotas.WithResourceFilter(resourceName))
+	}
+
+	projectQuotas, _, err := quotas.GetProjectQuotas(
+		selvpcClient,
+		projectID,
+		region,
+		filters...,
+	)
 	if err != nil {
 		return diag.FromErr(errGettingObject(objectProjectQuotas, projectID, err))
 	}
@@ -265,14 +309,15 @@ func resourceMKSNodegroupV1Create(ctx context.Context, d *schema.ResourceData, m
 	if v, ok := d.GetOk("enable_autoscale"); ok {
 		enableAutoscale := v.(bool)
 		createOpts.EnableAutoscale = &enableAutoscale
-	}
-	if v, ok := d.GetOk("autoscale_min_nodes"); ok {
-		autoscaleMinNodes := v.(int)
+
+		// d.GetOk returns false on autoscale_min_nodes set as 0.
+		autoscaleMinNodes := d.Get("autoscale_min_nodes").(int)
 		createOpts.AutoscaleMinNodes = &autoscaleMinNodes
-	}
-	if v, ok := d.GetOk("autoscale_max_nodes"); ok {
-		autoscaleMaxNodes := v.(int)
-		createOpts.AutoscaleMaxNodes = &autoscaleMaxNodes
+
+		if v, ok := d.GetOk("autoscale_max_nodes"); ok {
+			autoscaleMaxNodes := v.(int)
+			createOpts.AutoscaleMaxNodes = &autoscaleMaxNodes
+		}
 	}
 
 	labels := d.Get("labels").(map[string]interface{})
@@ -287,29 +332,11 @@ func resourceMKSNodegroupV1Create(ctx context.Context, d *schema.ResourceData, m
 		return diag.FromErr(errCreatingObject(objectNodegroup, err))
 	}
 
-	log.Printf("[DEBUG] waiting for cluster %s to become 'ACTIVE'", clusterID)
 	timeout := d.Timeout(schema.TimeoutCreate)
-	err = waitForMKSClusterV1ActiveState(ctx, mksClient, clusterID, timeout)
+
+	nodegroupID, err := waitForMKSNodegroupV1Creation(ctx, mksClient, clusterID, timeout, nodegroupIDs)
 	if err != nil {
 		return diag.FromErr(errCreatingObject(objectNodegroup, err))
-	}
-
-	// Get a list of all nodegroups in the cluster and find a new nodegroup.
-	allNodegroups, _, err = nodegroup.List(ctx, mksClient, clusterID)
-	if err != nil {
-		return diag.FromErr(errGettingObject("all nodegroups in the cluster", clusterID, err))
-	}
-
-	var nodegroupID string
-	for _, ng := range allNodegroups {
-		if _, ok := nodegroupIDs[ng.ID]; !ok {
-			nodegroupID = ng.ID
-		}
-	}
-	if nodegroupID == "" {
-		return diag.FromErr(errCreatingObject(objectNodegroup,
-			errors.New("unable to find new nodegroup by ID after creating"),
-		))
 	}
 
 	// The ID must be a combination of the cluster and nodegroup ID
@@ -346,6 +373,7 @@ func resourceMKSNodegroupV1Read(ctx context.Context, d *schema.ResourceData, met
 	}
 
 	d.Set("cluster_id", mksNodegroup.ClusterID)
+	d.Set("status", mksNodegroup.Status)
 	d.Set("flavor_id", mksNodegroup.FlavorID)
 	d.Set("volume_gb", mksNodegroup.VolumeGB)
 	d.Set("volume_type", mksNodegroup.VolumeType)
@@ -357,6 +385,8 @@ func resourceMKSNodegroupV1Read(ctx context.Context, d *schema.ResourceData, met
 	d.Set("autoscale_max_nodes", mksNodegroup.AutoscaleMaxNodes)
 	d.Set("nodegroup_type", mksNodegroup.NodegroupType)
 	d.Set("user_data", mksNodegroup.UserData)
+	d.Set("install_nvidia_device_plugin", mksNodegroup.InstallNvidiaDevicePlugin)
+	d.Set("preemptible", mksNodegroup.Preemptible)
 
 	if err := d.Set("labels", mksNodegroup.Labels); err != nil {
 		log.Print(errSettingComplexAttr("labels", err))
@@ -438,9 +468,9 @@ func resourceMKSNodegroupV1Update(ctx context.Context, d *schema.ResourceData, m
 			return diag.FromErr(errUpdatingObject(objectNodegroup, d.Id(), err))
 		}
 
-		log.Printf("[DEBUG] waiting for cluster %s to become 'ACTIVE'", clusterID)
+		log.Printf("[DEBUG] waiting for nodegroup %s to become 'ACTIVE'", nodegroupID)
 		timeout := d.Timeout(schema.TimeoutUpdate)
-		err = waitForMKSClusterV1ActiveState(ctx, mksClient, clusterID, timeout)
+		err = waitForMKSNodegroupV1ActiveState(ctx, mksClient, clusterID, nodegroupID, timeout)
 		if err != nil {
 			return diag.FromErr(errUpdatingObject(objectNodegroup, d.Id(), err))
 		}
@@ -460,7 +490,27 @@ func resourceMKSNodegroupV1Update(ctx context.Context, d *schema.ResourceData, m
 			AvailabilityZone: d.Get("availability_zone").(string),
 		}
 
-		projectQuotas, _, err := quotas.GetProjectQuotas(selvpcClient, projectID, region)
+		filters := []func(url.Values){
+			quotas.WithResourceFilter("compute_cores"),
+			quotas.WithResourceFilter("compute_ram"),
+		}
+		if newNodesRequest.LocalVolume {
+			filters = append(filters, quotas.WithResourceFilter("volume_gigabytes_local"))
+		} else {
+			// Removing an availability zone from volume type.
+			// For example: `fast.ru-3a` -> `fast`.
+			volumeType := strings.Split(newNodesRequest.VolumeType, ".")[0]
+			resourceName := "volume_gigabytes_" + volumeType
+
+			filters = append(filters, quotas.WithResourceFilter(resourceName))
+		}
+
+		projectQuotas, _, err := quotas.GetProjectQuotas(
+			selvpcClient,
+			projectID,
+			region,
+			filters...,
+		)
 		if err != nil {
 			return diag.FromErr(errGettingObject(objectProjectQuotas, projectID, err))
 		}
@@ -479,9 +529,9 @@ func resourceMKSNodegroupV1Update(ctx context.Context, d *schema.ResourceData, m
 			return diag.FromErr(errUpdatingObject(objectNodegroup, d.Id(), err))
 		}
 
-		log.Printf("[DEBUG] waiting for cluster %s to become 'ACTIVE'", clusterID)
+		log.Printf("[DEBUG] waiting for nodegroup %s to become 'ACTIVE'", nodegroupID)
 		timeout := d.Timeout(schema.TimeoutUpdate)
-		err = waitForMKSClusterV1ActiveState(ctx, mksClient, clusterID, timeout)
+		err = waitForMKSNodegroupV1ActiveState(ctx, mksClient, clusterID, nodegroupID, timeout)
 		if err != nil {
 			return diag.FromErr(errUpdatingObject(objectNodegroup, d.Id(), err))
 		}
@@ -511,11 +561,30 @@ func resourceMKSNodegroupV1Delete(ctx context.Context, d *schema.ResourceData, m
 		return diag.FromErr(errDeletingObject(objectNodegroup, d.Id(), err))
 	}
 
-	log.Printf("[DEBUG] waiting for cluster %s to become 'ACTIVE'", clusterID)
-	timeout := d.Timeout(schema.TimeoutDelete)
-	err = waitForMKSClusterV1ActiveState(ctx, mksClient, clusterID, timeout)
+	stateConf := &resource.StateChangeConf{
+		Pending: []string{strconv.Itoa(http.StatusOK)},
+		Target:  []string{strconv.Itoa(http.StatusNotFound)},
+		Refresh: func() (result interface{}, state string, err error) {
+			result, response, err := nodegroup.Get(ctx, mksClient, clusterID, nodegroupID)
+			if err != nil {
+				if response != nil {
+					return result, strconv.Itoa(response.StatusCode), nil
+				}
+
+				return nil, "", err
+			}
+
+			return result, strconv.Itoa(response.StatusCode), err
+		},
+		Timeout:    d.Timeout(schema.TimeoutDelete),
+		Delay:      10 * time.Second,
+		MinTimeout: 3 * time.Second,
+	}
+
+	log.Printf("[DEBUG] waiting for nodegroup %s to become deleted", d.Id())
+	_, err = stateConf.WaitForStateContext(ctx)
 	if err != nil {
-		return diag.FromErr(errDeletingObject(objectNodegroup, d.Id(), err))
+		return diag.FromErr(fmt.Errorf("error waiting for the nodegroup %s to become deleted: %s", d.Id(), err))
 	}
 
 	return nil
@@ -524,10 +593,10 @@ func resourceMKSNodegroupV1Delete(ctx context.Context, d *schema.ResourceData, m
 func resourceMKSNodegroupV1ImportState(_ context.Context, d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
 	config := meta.(*Config)
 	if config.ProjectID == "" {
-		return nil, errors.New("SEL_PROJECT_ID must be set for the resource import")
+		return nil, errors.New("INFRA_PROJECT_ID must be set for the resource import")
 	}
 	if config.Region == "" {
-		return nil, errors.New("SEL_REGION must be set for the resource import")
+		return nil, errors.New("INFRA_REGION must be set for the resource import")
 	}
 
 	d.Set("project_id", config.ProjectID)

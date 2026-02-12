@@ -7,7 +7,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/selectel/go-selvpcclient/v3/selvpcclient"
+	"github.com/selectel/go-selvpcclient/v4/selvpcclient"
 )
 
 var (
@@ -29,20 +29,19 @@ type Config struct {
 	DomainName     string
 	clientsCache   map[string]*selvpcclient.Client
 	lock           sync.Mutex
+
+	UserAgent string
 }
 
-func getConfig(d *schema.ResourceData) (*Config, diag.Diagnostics) {
+func getConfig(d *schema.ResourceData, userAgent string) (*Config, diag.Diagnostics) {
 	once.Do(func() {
 		cfgSingletone = &Config{
 			Username:   d.Get("username").(string),
 			Password:   d.Get("password").(string),
 			DomainName: d.Get("domain_name").(string),
-		}
-		if v, ok := d.GetOk("auth_url"); ok {
-			cfgSingletone.AuthURL = v.(string)
-		}
-		if v, ok := d.GetOk("auth_region"); ok {
-			cfgSingletone.AuthRegion = v.(string)
+			AuthURL:    d.Get("auth_url").(string),
+			AuthRegion: d.Get("auth_region").(string),
+			UserAgent:  userAgent,
 		}
 		if v, ok := d.GetOk("user_domain_name"); ok {
 			cfgSingletone.UserDomainName = v.(string)

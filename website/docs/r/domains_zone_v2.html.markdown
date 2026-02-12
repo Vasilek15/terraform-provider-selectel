@@ -8,7 +8,7 @@ description: |-
 
 # selectel\_domains\_zone\_v2
 
-Creates and manages a zone in DNS Hosting (actual) using public API v2. For more information about zones, see the [official Selectel documentation](https://docs.selectel.ru/en/networks-services/dns/zones/).
+Creates and manages a zone in DNS Hosting (actual) using public API v2. For more information about zones, see the [official Selectel documentation](https://docs.selectel.ru/en/networks-services/dns/zones/). With the zone, NS and SOA records with default values will be automatically created, you cannot edit or delete these records.
 
 ## Example usage
 
@@ -49,7 +49,7 @@ You can import a zone:
 export OS_DOMAIN_NAME=<account_id>
 export OS_USERNAME=<username>
 export OS_PASSWORD=<password>
-export SEL_PROJECT_ID=<selectel_project_id>
+export INFRA_PROJECT_ID=<selectel_project_id>
 terraform import selectel_domains_zone_v2.zone_1 <zone_name>
 ```
 

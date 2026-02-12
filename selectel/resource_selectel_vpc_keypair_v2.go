@@ -9,7 +9,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/selectel/go-selvpcclient/v3/selvpcclient/resell/v2/keypairs"
+	"github.com/selectel/go-selvpcclient/v4/selvpcclient/resell/v2/keypairs"
 )
 
 func resourceVPCKeypairV2() *schema.Resource {
@@ -92,7 +92,7 @@ func resourceVPCKeypairV2Read(_ context.Context, d *schema.ResourceData, meta in
 	if err != nil {
 		return diag.FromErr(errParseID(objectKeypair, d.Id()))
 	}
-	existingKeypairs, _, err := keypairs.List(selvpcClient)
+	existingKeypairs, _, err := keypairs.ListWithOpts(selvpcClient, keypairs.ListOpts{UserID: userID})
 	if err != nil {
 		return diag.FromErr(errSearchingKeypair(keypairName, err))
 	}

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"math/rand"
+	"math/rand" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used
 	"sort"
 	"strconv"
 	"strings"
@@ -58,7 +58,8 @@ func getDBaaSClient(d *schema.ResourceData, meta interface{}) (*dbaas.API, diag.
 }
 
 func stringChecksum(s string) (string, error) {
-	h := md5.New() // #nosec
+	// #nosec G401
+	h := md5.New() // nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5
 	_, err := h.Write([]byte(s))
 	if err != nil {
 		return "", err
@@ -124,15 +125,18 @@ func resourceDBaaSDatastoreV1FlavorFromSet(flavorSet *schema.Set) (*dbaas.Flavor
 	if resourceDiskRaw, ok = resourceFlavorMap["disk"]; !ok {
 		return &dbaas.Flavor{}, errors.New("flavor.disk value isn't provided")
 	}
+	resourceDiskTypeRaw := resourceFlavorMap["disk_type"].(string)
 
 	resourceVcpus := resourceVcpusRaw.(int)
 	resourceRAM := resourceRAMRaw.(int)
 	resourceDisk := resourceDiskRaw.(int)
+	resourceDiskType := dbaas.DiskType(resourceDiskTypeRaw)
 
 	flavor := &dbaas.Flavor{
-		Vcpus: resourceVcpus,
-		RAM:   resourceRAM,
-		Disk:  resourceDisk,
+		Vcpus:    resourceVcpus,
+		RAM:      resourceRAM,
+		Disk:     resourceDisk,
+		DiskType: resourceDiskType,
 	}
 
 	return flavor, nil
@@ -144,9 +148,10 @@ func resourceDBaaSDatastoreV1FlavorToSet(flavor dbaas.Flavor) *schema.Set {
 	}
 
 	flavorSet.Add(map[string]interface{}{
-		"vcpus": flavor.Vcpus,
-		"ram":   flavor.RAM,
-		"disk":  flavor.Disk,
+		"vcpus":     flavor.Vcpus,
+		"ram":       flavor.RAM,
+		"disk":      flavor.Disk,
+		"disk_type": string(flavor.DiskType),
 	})
 
 	return flavorSet
@@ -164,27 +169,6 @@ func resourceDBaaSDatastoreV1InstancesToList(instances []dbaas.Instances) []inte
 	}
 
 	return flattenedInstances
-}
-
-func resourceDBaaSDatastoreV1FirewallOptsFromSet(firewallSet *schema.Set) (dbaas.DatastoreFirewallOpts, error) {
-	if firewallSet.Len() == 0 {
-		return dbaas.DatastoreFirewallOpts{IPs: []string{}}, nil
-	}
-
-	var resourceIPsRaw interface{}
-	var ok bool
-
-	resourceFirewallRaw := firewallSet.List()[0].(map[string]interface{})
-	if resourceIPsRaw, ok = resourceFirewallRaw["ips"]; !ok {
-		return dbaas.DatastoreFirewallOpts{}, errors.New("firewall.ips value isn't provided")
-	}
-	resourceIPRaw := resourceIPsRaw.([]interface{})
-	var firewall dbaas.DatastoreFirewallOpts
-	for _, ip := range resourceIPRaw {
-		firewall.IPs = append(firewall.IPs, ip.(string))
-	}
-
-	return firewall, nil
 }
 
 func resourceDBaaSDatastoreV1RestoreOptsFromSet(restoreSet *schema.Set) (*dbaas.Restore, error) {
@@ -345,30 +329,36 @@ func resizeDatastore(ctx context.Context, d *schema.ResourceData, client *dbaas.
 	nodeCount := d.Get("node_count").(int)
 	resizeOpts.NodeCount = nodeCount
 
-	flavorID := d.Get("flavor_id")
-	flavorRaw := d.Get("flavor")
-
-	flavorSet := flavorRaw.(*schema.Set)
-	flavor, err := resourceDBaaSDatastoreV1FlavorFromSet(flavorSet)
-	if err != nil {
-		return errParseDatastoreV1Resize(err)
-	}
-
-	typeID := d.Get("type_id").(string)
-	datastoreType, err := client.DatastoreType(ctx, typeID)
-	if err != nil {
-		return errors.New("Couldnt get datastore type with id" + typeID)
-	}
-	if datastoreType.Engine == "redis" {
-		resizeOpts.Flavor = nil
+	if d.HasChange("flavor_id") {
+		flavorID := d.Get("flavor_id")
 		resizeOpts.FlavorID = flavorID.(string)
-	} else {
-		resizeOpts.Flavor = flavor
-		resizeOpts.FlavorID = flavorID.(string)
-	}
+	} else if d.HasChange("flavor") {
+		oldFlavorRaw, newFlavorRaw := d.GetChange("flavor")
 
+		newFlavorSet := newFlavorRaw.(*schema.Set)
+		newFlavor, err := resourceDBaaSDatastoreV1FlavorFromSet(newFlavorSet)
+		if err != nil {
+			return errParseDatastoreV1Resize(err)
+		}
+
+		oldFlavorSet := oldFlavorRaw.(*schema.Set)
+		oldFlavor, err := resourceDBaaSDatastoreV1FlavorFromSet(oldFlavorSet)
+		if err != nil {
+			return errParseDatastoreV1Resize(err)
+		}
+
+		if newFlavor.DiskType != oldFlavor.DiskType {
+			return errors.New("flavor disk type cannot be changed")
+		}
+		// Api does'not support resize using flavor disk_type
+		resizeOpts.Flavor = &dbaas.Flavor{
+			Vcpus: newFlavor.Vcpus,
+			RAM:   newFlavor.RAM,
+			Disk:  newFlavor.Disk,
+		}
+	}
 	log.Print(msgUpdate(objectDatastore, d.Id(), resizeOpts))
-	_, err = client.ResizeDatastore(ctx, d.Id(), resizeOpts)
+	_, err := client.ResizeDatastore(ctx, d.Id(), resizeOpts)
 	if err != nil {
 		return errUpdatingObject(objectDatastore, d.Id(), err)
 	}
@@ -452,6 +442,12 @@ func getDatastoreReplicasInstancesIDsWithoutFloatings(datastore dbaas.Datastore)
 func refreshDatastoreInstancesOutputsDiff(_ context.Context, diff *schema.ResourceDiff, _ interface{}) error {
 	if diff.HasChanges("floating_ips") {
 		if err := diff.SetNewComputed("instances"); err != nil {
+			return err
+		}
+	}
+
+	if diff.HasChanges("node_count") {
+		if err := diff.SetNewComputed("connections"); err != nil {
 			return err
 		}
 	}
@@ -689,4 +685,93 @@ func removeReplicasFloatingIPs(ctx context.Context, d *schema.ResourceData, clie
 	}
 
 	return nil
+}
+
+func resourceDBaaSDatastoreV1SecurityGroupsFromSet(securityGroupsSet *schema.Set) ([]string, error) {
+	if securityGroupsSet.Len() == 0 {
+		return nil, fmt.Errorf("security group must include at least one value")
+	}
+
+	securityGroups := make([]string, securityGroupsSet.Len())
+
+	for index, uuidVal := range securityGroupsSet.List() {
+		value, ok := uuidVal.(string)
+		if ok {
+			securityGroups[index] = value
+		} else {
+			return securityGroups, fmt.Errorf("string cast error %q", value)
+		}
+	}
+
+	return securityGroups, nil
+}
+
+func updateDatastoreSecurityGroups(ctx context.Context, d *schema.ResourceData, client *dbaas.API) error {
+	sgInterface := d.Get("security_groups")
+
+	securityGroupsSet := sgInterface.(*schema.Set)
+
+	securityGroups, err := resourceDBaaSDatastoreV1SecurityGroupsFromSet(securityGroupsSet)
+	if err != nil {
+		return errParseDatastoreV1SecurityGroups(err)
+	}
+
+	securityGroupsOpts := dbaas.DatastoreSecurityGroupOpts{
+		SecurityGroups: securityGroups,
+	}
+
+	log.Printf("[DEBUG] updating datastore %q security groups %+v", d.Id(), securityGroupsOpts)
+
+	if _, updateErr := client.UpdateSecurityGroup(ctx, d.Id(), securityGroupsOpts); updateErr != nil {
+		return updateErr
+	}
+
+	return nil
+}
+
+func dbaasLogsEnable(ctx context.Context, d *schema.ResourceData, client *dbaas.API) error {
+	var logsOpts dbaas.LogPlatformOpts
+	logsOpts.LogPlatform = dbaas.DatastoreLogGroup{LogGroup: d.Get("logs").(string)}
+
+	log.Printf("[DEBUG] Enable Logs for the datastore %s", d.Id())
+
+	if _, err := client.EnableLogPlatform(ctx, d.Id(), logsOpts); err != nil {
+		return fmt.Errorf("error enabling Logs for the datastore %s", d.Id())
+	}
+
+	log.Printf("[DEBUG] waiting for datastore %s to become 'ACTIVE'", d.Id())
+
+	timeout := d.Timeout(schema.TimeoutUpdate)
+	if err := waiters.WaitForDBaaSDatastoreV1ActiveState(ctx, client, d.Id(), timeout); err != nil {
+		return errUpdatingObject(objectDatastore, d.Id(), err)
+	}
+
+	return nil
+}
+
+func dbaasLogsDisable(ctx context.Context, d *schema.ResourceData, client *dbaas.API) error {
+	log.Printf("[DEBUG] Disable Logs for the datastore %s", d.Id())
+
+	if err := client.DisableLogPlatform(ctx, d.Id()); err != nil {
+		return fmt.Errorf("error disabling Logs for the datastore %s", d.Id())
+	}
+
+	log.Printf("[DEBUG] waiting for datastore %s to become 'ACTIVE'", d.Id())
+
+	timeout := d.Timeout(schema.TimeoutUpdate)
+	if err := waiters.WaitForDBaaSDatastoreV1ActiveState(ctx, client, d.Id(), timeout); err != nil {
+		return errUpdatingObject(objectDatastore, d.Id(), err)
+	}
+
+	return nil
+}
+
+func dbaasLogsUpdate(ctx context.Context, d *schema.ResourceData, client *dbaas.API) error {
+	newLogs := d.Get("logs")
+
+	if newLogs.(string) == "" {
+		return dbaasLogsDisable(ctx, d, client)
+	}
+
+	return dbaasLogsEnable(ctx, d, client)
 }
